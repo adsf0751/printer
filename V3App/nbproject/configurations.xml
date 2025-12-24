@@ -4,6 +4,8 @@
     <logicalFolder name="HeaderFiles"
                    displayName="Header Files"
                    projectFiles="true">
+      <itemPath>Trans.h</itemPath>
+      <itemPath>print.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ResourceFiles"
                    displayName="Resource Files"
@@ -80,7 +82,11 @@
           <commandLine>-L . "-L${SDKV3LIB}" "-L${SDKV3LIBN}"</commandLine>
         </linkerTool>
       </compileType>
+      <item path="Trans.h" ex="false" tool="3" flavor2="0">
+      </item>
       <item path="appmain.c" ex="false" tool="0" flavor2="0">
+      </item>
+      <item path="print.h" ex="false" tool="3" flavor2="0">
       </item>
     </conf>
     <conf name="Debug" type="1">
@@ -138,7 +144,11 @@
           <commandLine>-L . "-L${SDKV3LIB}" "-L${SDKV3LIBN}"</commandLine>
         </linkerTool>
       </compileType>
+      <item path="Trans.h" ex="false" tool="3" flavor2="0">
+      </item>
       <item path="appmain.c" ex="false" tool="0" flavor2="0">
+      </item>
+      <item path="print.h" ex="false" tool="3" flavor2="0">
       </item>
     </conf>
   </confs>

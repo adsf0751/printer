@@ -12,14 +12,12 @@ inPRINT_Buffer_OutPut
 #include <stdarg.h>
 
 #include <ctosapi.h>
-#include "../CASV3AH-D-019_20251031_1/SRC/SOURCE/INCLUDES/Transaction.h"
-#include "../CASV3AH-D-019_20251031_1/SRC/SOURCE/INCLUDES/Define_1.h"
+
 #define d_FILE_READ   0x0001   // 或類似
 
-#include "../CASV3AH-D-019_20251031_1/SRC/SOURCE/INCLUDES/Define_2.h"
-#include "../CASV3AH-D-019_20251031_1/SRC/SOURCE/FUNCTION/CFGT.h"
-#include "../CASV3AH-D-019_20251031_1/SRC/SOURCE/PRINT/Print.h"
-#include "../CASV3AH-D-019_20251031_1/SRC/SOURCE/PRINT/PrtMsg.h"
+#include "Trans.h"
+#include "print.h"
+
 int inPRINT_Buffer_Initial(unsigned char *uszBuffer, int inYLength, FONT_ATTRIB *srFont_Attrib, BufferHandle *srBhandle)
 {
 	char		szDebugMsg[100 + 1];
@@ -248,8 +246,20 @@ int main(int argc,char *argv[])
 	unsigned char		uszBuffer[PB_CANVAS_X_SIZE * 8 * _BUFFER_MAX_LINE_];
 	BufferHandle		srBhandle;
 	FONT_ATTRIB		srFont_Attrib;
-        TRANSACTION_OBJECT*     pobTran = malloc(sizeof(*pobTran));
-        pobTran->srBRec.inPrintOption = _PRT_CUST_;
+        TRANSACTION_OBJECT	pobTran;
+        //TRANSACTION_OBJECT*     pobTran = malloc(sizeof(*pobTran));
+        pobTran.srBRec.inPrintOption = _PRT_CUST_;
+        
+       
+        CTOS_PrinterFontSelectMode(d_FONT_TTF_MODE);
+        CTOS_FontTTFSelectFontFile(d_FONT_DEVICE_PRINTER, "ca_default.ttf", 0);
+        CTOS_FontTTFSelectStyle(d_FONT_DEVICE_PRINTER, d_FONT_STYLE_NORMAL);
+        
+        
+        CTOS_PrinterPutString("Test 測試");
+        
+        inPRINT_Buffer_Initial(uszBuffer,_BUFFER_MAX_LINE_,&srFont_Attrib,&srBhandle);
+        
         char 	szPrintBuf[100 + 1];
         memset(szPrintBuf, 0x00, sizeof(szPrintBuf));
 	BYTE key;
@@ -260,7 +270,7 @@ int main(int argc,char *argv[])
         sprintf(szPrintBuf, "card no：%s", "test12345");
         inRetVal = inPRINT_Buffer_PutIn(szPrintBuf, _PRT_DOUBLE_HEIGHT_WIDTH_, uszBuffer, &srFont_Attrib, &srBhandle, _LAST_ENTRY_, _PRINT_LEFT_);
         printf("%u\n",sizeof(TRANSACTION_OBJECT));
-        printf("%u\n",sizeof(*pobTran));
+        printf("%u\n",sizeof(pobTran));
         sprintf(debugMsg, "%d", inRetVal);
         CTOS_LCDTPrintXY(1, 1,szPrintBuf );
         CTOS_KBDGet(&key);
