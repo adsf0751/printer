@@ -18,18 +18,7 @@
 extern "C" {
 #endif
 
-typedef struct					
-{
-	int	inXbound;	/* 用來紀錄buffer的寬度，inXcurrent不應超過它 */
-	int	inYbound;	/* 用來紀錄buffer的高度，inXcurrent不應超過它 */
-	int	inXcurrent;	/* handle目前的X位置 */
-	int	inYcurrent;	/* handle目前的Y位置 */
-	int	inYcurrentMAX;	/* 紀錄當前這一行，最下面的位置(當同一行有印大字小字，用來表示底線在哪) */
-	int	inYcover;	//如果有底圖，則要與inYcurrent比較那一個比較下面
-	unsigned char	uszDetailPrint;	/* 列印明細顯示畫面用 避免多筆誤以為當機 */
-}BufferHandle;
-
-
+   
 typedef enum
 {
 	VS_USER_CANCEL			= (-1000),		/* 使用者取消交易 */
@@ -66,6 +55,16 @@ typedef enum
 	VS_WRITE_KEY_ERROR			,		/* 表示寫key失敗 */
 }RESPONSE_V3;
 
+typedef enum
+{
+	_BAUL_FONT_STYLE_UNCHANGE_ = 0,	/* 代表字體不做更改 */
+	_BAUL_FONT_STYLE_REGULAR_,
+	_BAUL_FONT_STYLE_ITALIC_,
+	_BAUL_FONT_STYLE_BOLD_,
+	_BAUL_FONT_STYLE_REVERSE_,
+	_BAUL_FONT_STYLE_UNDERLINE_,
+}BAUL_FONT;
+
 #define FONT_ATTRIB			CTOS_FONT_ATTRIB
 
 /* Print Options */
@@ -99,6 +98,41 @@ typedef enum
 
 
 #define _PRT_HEIGHT_                    d_FONT_12x24
+
+
+/* 定義字型Style */
+#define _FONT_PRINT_REGULAR_		d_FONT_STYLE_NORMAL
+#define _FONT_PRINT_ITALIC_		d_FONT_STYLE_ITALIC
+#define _FONT_PRINT_BOLD_		d_FONT_STYLE_BOLD
+#define _FONT_PRINT_REVERSE_		d_FONT_STYLE_REVERSE
+#define _FONT_PRINT_UNDERLINE_		d_FONT_STYLE_UNDERLINE
+
+
+typedef struct					
+{
+	int	inXbound;	/* 用來紀錄buffer的寬度，inXcurrent不應超過它 */
+	int	inYbound;	/* 用來紀錄buffer的高度，inXcurrent不應超過它 */
+	int	inXcurrent;	/* handle目前的X位置 */
+	int	inYcurrent;	/* handle目前的Y位置 */
+	int	inYcurrentMAX;	/* 紀錄當前這一行，最下面的位置(當同一行有印大字小字，用來表示底線在哪) */
+	int	inYcover;	//如果有底圖，則要與inYcurrent比較那一個比較下面
+	unsigned char	uszDetailPrint;	/* 列印明細顯示畫面用 避免多筆誤以為當機 */
+}BufferHandle;
+
+
+
+/* 用來控制PutIn在同一底線上，所以先把該行要Putin的字先存起來 */
+typedef struct					
+{	BufferHandle		srBhandle;
+	char			szString[300];		/* 暫放的字句 (因優惠兌換資訊，所以上調到300) */
+	FONT_ATTRIB		srFont_Attrib;		/* 字型資訊 */
+	unsigned char		uszPrintPosition;	/* 靠左或靠右 */
+	int			intXPosition;		/* X軸位置 */
+	int			inFontStyle;		/* 字體字型 */
+}BufferArrangeUnderLine;    
+    
+
+
 
 
 #ifdef __cplusplus
