@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <ctosapi.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "Trans.h"
 #include "print.h"
 #include "PrtMsg.h"
@@ -35,9 +39,13 @@
 #define TIMER_ID_3              2
 #define TIMER_ID_4              3
 #define _EDC_TIMEOUT_           -1  /* 由EDC.dat控制 */
-
-
-static EDC_REC srEDCRec;
+#define AF_INET                 PF_INET
+#define	PF_INET                 2	/* IP protocol family.  */
+#define SOL_SOCKET              1
+#define SO_REUSEADDR            2
+#define SOL_TCP                 6	/* TCP level */
+#define	TCP_MAXSEG              2	/* Set maximum segment size  */
+static  EDC_REC srEDCRec;
 int ginBAUL_Index = 0;
 int imgHeight     = 0;
 
@@ -45,7 +53,7 @@ int imgHeight     = 0;
 char ipAddr[] = "10.105.109.155"; //IP Address
 char mask[] = "255.255.254.0"; //Mask
 char gateWay[] = "10.105.109.254"; //Gateway IP
-char hostIp[] = "10.105.108.105"; //Server IP
+char hostIp[] = "10.105.108.43"; //Server IP
 char hostPort[] = "5000"; //Server Port
 
 typedef struct {
@@ -57,9 +65,36 @@ typedef struct {
     int inInstHeight; /* 分期警語高度 */
     int inNoticeHeight; /* 商店提示與高度 */
 } BMPHeight;
+typedef struct
+{
+	int	inRecordRowID;			/* SQLite使用，用於暫存Table的Rowid */
+	char	szTMS_IP_Primary[15 + 1];
+	char	szTMS_PortNo_Primary[5 + 1];
+	char	szTMS_IP_Second[15 + 1];
+	char	szTMS_PortNo_Second[5 + 1];
+} TMSIPDT_REC;
+
+typedef struct
+{
+        char szCommIndex[2 + 1];                /* 通訊參數索引 */
+        char szTPDU[10 + 1];                    /* 60nnnnnnnn */
+        char szNII[3 + 1];                      /* 網路識別碼 */
+        char szHostTelPrimary[15 + 1];          /* 第一授權撥接電話 */
+        char szHostTelSecond[15 + 1];           /* 第二授權撥接電話 */
+        char szReferralTel[15 + 1];             /* Call Bank 撥接電話 */
+        char szHostIPPrimary[15 + 1];           /* 第一授權主機 IP Address  */
+        char szHostPortNoPrimary[5 + 1];        /* 第一授權主機 Port No. */
+        char szHostIPSecond[15 + 1];            /* 第二授權主機 IP Address */
+        char szHostPortNoSecond[5 + 1];         /* 第二授權主機 Port No. */
+        char szTCPHeadFormat[1 + 1];            /* TCP 電文長度之格式。( B=BCD，H=Binary)，預設值= H。 */
+        char szCarrierTimeOut[2 + 1];           /* 連線等候時間。(超過等候時間，自動撥第二授權電話或IP Address) */
+        char szHostResponseTimeOut[2 + 1];      /* 授權等候時間。(超過等候時間，自動斷線) */
+}CPT_REC;
 BMPHeight gsrBMPHeight;
 BufferArrangeUnderLine gsrBAUL[5];
-
+static  TMSIPDT_REC	srTMSIPDTRec;	/* construct TMSIPDT record */
+static  CPT_REC srCPTRec;	/* construct CPT record */
+int	ginTrans_ClientFd;
 /*
 Function	:inPutGraphic
 Date&Time	:2015/6/7 下午 5:09
@@ -909,7 +944,38 @@ int inSetTermGetewayAddress(char* szTermGetewayAddress) {
 
     return (VS_SUCCESS);
 }
+/*
+Function        :inGetHostIPPrimary
+Date&Time       :
+Describe        :
+*/
+int inGetHostIPPrimary(char* szHostIPPrimary)
+{
+        /* 傳進的指標 不得為空  長度需大於0 小於規定最大值 */
+        if (szHostIPPrimary == NULL || strlen(srCPTRec.szHostIPPrimary) <= 0 || strlen(srCPTRec.szHostIPPrimary) > 15)
+        {
+                return (VS_ERROR);
+        }
+        memcpy(&szHostIPPrimary[0], &srCPTRec.szHostIPPrimary[0], strlen(srCPTRec.szHostIPPrimary));
 
+        return (VS_SUCCESS);
+}
+/*
+Function        :inGetHostPortNoPrimary
+Date&Time       :
+Describe        :
+*/
+int inGetHostPortNoPrimary(char* szHostPortNoPrimary)
+{
+        /* 傳進的指標 不得為空  長度需大於0 小於規定最大值 */
+        if (szHostPortNoPrimary == NULL || strlen(srCPTRec.szHostPortNoPrimary) <= 0 || strlen(srCPTRec.szHostPortNoPrimary) > 5)
+        {
+                return (VS_ERROR);
+        }
+        memcpy(&szHostPortNoPrimary[0], &srCPTRec.szHostPortNoPrimary[0], strlen(srCPTRec.szHostPortNoPrimary));
+
+        return (VS_SUCCESS);
+}
 int inTimerStart(int inTimerNbr, long lnDelay) {
     CTOS_TimeOutSet(inTimerNbr, lnDelay * 100);
 
@@ -987,7 +1053,8 @@ int inETHERNET_Initial(void) {
     inSetTermIPAddress(ipAddr);
     inSetTermMASKAddress(mask);
     inSetTermGetewayAddress(gateWay);
-    
+    memcpy(&srCPTRec.szHostIPPrimary[0], &hostIp[0], strlen(hostIp));
+    memcpy(&srCPTRec.szHostPortNoPrimary[0], &hostPort[0], strlen(hostPort));
     //暫不實現
     //	inDISP_ClearAll();
     //	inFunc_Display_LOGO( 0,  _COORDINATE_Y_LINE_16_2_);				/* 第一層顯示 LOGO */
@@ -1070,7 +1137,796 @@ void EthernetPing(const char* ip)
       printf("ping %s failed,ret is %X\n",PingBuff,ret);
   }
 }
+/*
+Function        :inETHERNET_DisConnect_By_Native
+Date&Time       :2017/8/2 下午 5:37
+Describe        :
+*/
+int inETHERNET_DisConnect_By_Native()
+{
+	int		inRetVal = VS_ERROR;
+	char		szDebugMsg[100 + 1];
+		
+//	/* 防呆，小於0會存取到錯的記憶體 */
+//	if (ginTrans_ClientFd > 0)
+//	{
+//		inRetVal = close(ginTrans_ClientFd);
+//	}
+//	else
+//	{
+//		inRetVal = VS_ERROR;
+//	}
+	
+	if (inRetVal == 0)
+	{
+		inRetVal= VS_SUCCESS;
+//		inFile_Open_File_Cnt_Decrease();
+	}
+	else
+	{
+		return (VS_ERROR);
+	}
+		
+	return (VS_SUCCESS);
+}
+/*
+Function        :inETHERNET_DisConnect_Flow
+Date&Time       :2017/8/2 下午 5:35
+Describe        :分流
+*/
+int inETHERNET_DisConnect_Flow()
+{
+	int	inRetVal = VS_ERROR;
+//	vdUtility_SYSFIN_LogMessage(AT, "Ethernet Disconect:(way:%d)", ginEthernetFlow);
+//	
+//	if (ginEthernetFlow == _ETHERNET_FLOW_IFES_)
+//	{
+//		inRetVal = inETHERNET_DisConnect_TLS_Flow();
+//		if (inRetVal == VS_SUCCESS)
+//		{
+//			ginEthernetFlow = _ETHERNET_FLOW_CTOS_;
+//		}
+//	}
+	/* 用native方式建Socket，之後要優化再考慮使用(優點自己決定Timeout等等細微設定) */
+//	else if (ginEthernetFlow == _ETHERNET_FLOW_NATIVE_)
+//	{   
+                //to fix:基本上這個function沒用處，因為未使用到inFile_Open_File_Cnt_Decrease()等
+		inRetVal = inETHERNET_DisConnect_By_Native();
+//		if (inRetVal == VS_SUCCESS)
+//		{
+//			ginEthernetFlow = _ETHERNET_FLOW_CTOS_;
+//		}
+//	}
+	/* 虹堡API */
+//	else
+//	{
+//		inRetVal = inETHERNET_DisConnect();
+//		if (inRetVal == VS_SUCCESS)
+//		{
+//			ginEthernetFlow = _ETHERNET_FLOW_CTOS_;
+//		}
+//	}
+	
+	if (inRetVal == VS_SUCCESS)
+	{
+//		vdUtility_SYSFIN_LogMessage(AT, "Ethernet Disconect Success");
+		return (VS_SUCCESS);
+	}
+	else
+	{
+//		vdUtility_SYSFIN_LogMessage(AT, "Ethernet Disconect Fail");
+		return (VS_ERROR);
+	}
+}
 
+/*
+Function        :inETHERNET_END
+Date&Time       :2017/7/19 上午 11:09
+Describe        :斷線
+*/
+int inETHERNET_END(void)
+{
+        /* inETHERNET_END() START! */
+	if (inETHERNET_DisConnect_Flow() != VS_SUCCESS)
+	{
+		return (VS_ERROR);
+	}
+
+        /* inETHERNET_END() END! */
+        return (VS_SUCCESS);
+}
+/*
+Function        :inTimerGet
+Date&Time       :2016/6/21 下午 1:54
+Describe        :確認計時器是否TimeOut，若timeout會回傳VS_SUCCESS
+*/
+int inTimerGet(int inTimerNbr)
+{
+         if (CTOS_TimeOutCheck(inTimerNbr) == d_YES)
+                return (VS_SUCCESS);
+         else
+                return (VS_ERROR);
+}
+/*
+Function        :inETHERNET_Connect_By_Native
+Date&Time       :2017/7/31 下午 4:31
+Describe        :原生C Socket連線
+*/
+int inETHERNET_Connect_By_Native(char *szHostIP, char *szPort)
+{
+	int			inRetVal = 0;
+	int			inOption = 0;
+	int			inFlags = 0;
+	char			szDebugMsg[100 + 1];
+	struct sockaddr_in	stAddr;			/* 放Host address的結構 */
+	
+
+	/* 初始化address */
+	memset(&stAddr, 0x00, sizeof (stAddr)); //clear all zero.
+	stAddr.sin_family = AF_INET;
+	stAddr.sin_addr.s_addr = inet_addr(szHostIP);
+	stAddr.sin_port = htons(atoi(szPort));
+
+	ginTrans_ClientFd = socket(AF_INET, SOCK_STREAM, 0);
+	if (ginTrans_ClientFd == -1)
+	{
+            printf("socket return fd is %d\n",ginTrans_ClientFd);
+            return (VS_ERROR);
+	}
+//	else
+//	{
+//		inFile_Open_File_Cnt_Increase();
+//	}
+	
+	/* 系统預設的狀態發送與接收一次為8688 Bytes(約為8.5K) 應該夠用，所以不必特別調整buffer大小 */
+	
+	
+	/* 開關 ON */
+	inOption = 1;
+	/* 允許重用本地位址和埠 */
+	setsockopt(ginTrans_ClientFd, SOL_SOCKET, SO_REUSEADDR, &inOption, sizeof(inOption));
+	/* 設定MSS(maximum segment size) 預設為536，和520同步解決宏遠電信問題，含header設為1400，扣掉header(54)應該設為1346 */
+	inOption = 1346;
+	setsockopt(ginTrans_ClientFd, SOL_TCP, TCP_MAXSEG, &inOption, sizeof(inOption));
+
+	/* Linux内核中对connect的超时时间限制是75s， Soliris 9是几分钟，因此通常认为是75s到几分钟不等*/
+	/* 師爺給我翻譯翻譯：不用非阻塞Timeut就是75秒，所以一定要用非阻塞 */
+	/* 先獲得現在Handle的開關狀態 */
+	inFlags = fcntl(ginTrans_ClientFd, F_GETFL, 0);
+	/* 把非阻塞開關On起來(做or運算)，並設定回去 */
+	fcntl(ginTrans_ClientFd, F_SETFL, inFlags | O_NONBLOCK);
+	
+	/* 連線Timout 2秒 */
+	inRetVal = inDISP_Timer_Start(_TIMER_NEXSYS_1_, 2);
+        if(inRetVal==VS_SUCCESS)
+            printf("inDISP_Timer_Start successed\n");
+        else
+            printf("inDISP_Timer_Start failed\n");
+	do
+	{
+            
+		/* Timeout */
+		if (inTimerGet(_TIMER_NEXSYS_1_) == VS_SUCCESS)
+		{
+                    printf("inTimerGet timeout\n");
+			return (VS_TIMEOUT);
+		}
+		
+		inRetVal = connect(ginTrans_ClientFd, (void*)&stAddr, sizeof(stAddr));
+		/* 通常只有同一台機器內Clinet連server，才有可能馬上成功 */
+		if (inRetVal == 0)
+		{
+                    //inETHERNET_Watch_Status();
+                    printf("connect succcessed,ClientFd is %d\n",ginTrans_ClientFd);
+                    
+		}
+		else
+		{
+                    printf("connect failed\n");
+		}
+		
+	} while (inRetVal != 0);
+
+	return (VS_SUCCESS);
+}
+/*
+Function        :inETHERNET_Get_Status
+Date&Time       :2018/3/9 下午 1:23
+Describe        :
+*/
+int inETHERNET_Get_Status(unsigned int *uiStatus)
+{
+	unsigned short  usRetval;
+	
+	if (uiStatus == NULL)
+		return (VS_ERROR);
+	
+	usRetval = CTOS_EthernetStatus(uiStatus);
+	
+	if (usRetval != d_OK)
+	{
+            printf( "CTOS_EthernetStatus Error : 0x%04x", usRetval);
+	}
+	
+	return (VS_SUCCESS);
+}
+/*
+Function        :inETHERNET_Watch_Status
+Date&Time       :2016/10/11 下午 3:50
+Describe        :
+*/
+int inETHERNET_Watch_Status(void)
+{
+	unsigned char	uszTemplate[40 + 1];
+	unsigned char	uszLen = 0;
+	DWORD	uiStatus = 0;
+	/* Get the status of the Ethernet */
+	inETHERNET_Get_Status(&uiStatus);
+	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+	if (uiStatus & d_STATUS_ETHERNET_CONNECTED)
+	{
+		strcat(uszTemplate, "Connected ");
+	}
+	else
+	{
+		 strcat(uszTemplate, "NotConnected ");
+	}
+	
+	if (uiStatus & d_STATUS_ETHERNET_PHYICAL_ONLINE)
+	{
+		strcat(uszTemplate, "Phyical_Online ");
+	}
+	else
+	{
+		 strcat(uszTemplate, "NotPhyical_Online ");
+	}
+		
+	if (uiStatus & d_STATUS_ETHERNET_RX_READY)
+	{
+		strcat(uszTemplate, "RxReady ");
+	}
+	else
+	{
+		 strcat(uszTemplate, "NotRxReady ");
+	}
+	
+	if (uiStatus & d_STATUS_ETHERNET_TX_BUSY)
+	{
+		strcat(uszTemplate, "TxBusy ");
+	}
+	else
+	{
+		 strcat(uszTemplate, "NotTxBusy ");
+	}
+        printf("status %s\n",uszTemplate);
+//	/* Get the status of the Ethernet */
+//	inETHERNET_Get_Status(&uiStatus);
+//
+//	/* if Ethernet is connected */
+//	if (uiStatus & d_STATUS_ETHERNET_CONNECTED)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			inLogPrintf(AT, "EthernetStatus : Connected");
+//		}
+//	}
+//	/* if Ethernet is command mode */
+//	if (uiStatus & d_STATUS_ETHERNET_COMMAND_MODE)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			inLogPrintf(AT, "EthernetStatus : Command Mode");
+//		}
+//	}
+//	
+//	/* if Ethernet is phyical online */
+//	if (uiStatus & d_STATUS_ETHERNET_PHYICAL_ONLINE)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			inLogPrintf(AT, "EthernetStatus : Phyical Online");
+//		}
+//	}
+//	else
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			inLogPrintf(AT, "網路線沒插好！！");
+//		}
+//	}
+//	
+//	/* if Ethernet is Rx readey */
+//	if (uiStatus & d_STATUS_ETHERNET_RX_READY)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			inLogPrintf(AT, "EthernetStatus : Rx Ready");
+//		}
+//	}
+//	
+//	/* if Ethernet is Tx busy */
+//	if (uiStatus & d_STATUS_ETHERNET_TX_BUSY)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			inLogPrintf(AT, "EthernetStatus : Tx Busy");
+//		}
+//	}
+	
+//	/* IP */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_IP, uszTemplate, &uszLen);
+//	
+//	/* MASK */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_MASK, uszTemplate, &uszLen);
+//	
+//	/* GATEWAY */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_GATEWAY, uszTemplate, &uszLen);
+//	
+//	/* HOSTIP */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_HOSTIP, uszTemplate, &uszLen);
+//	
+//	/* HOST PORT */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_HOSTPORT, uszTemplate, &uszLen);
+//	
+//	/* CONFIG VERSION */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_VERSION, uszTemplate, &uszLen);
+//	
+//	/* CONFIG MAC */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_MAC, uszTemplate, &uszLen);
+//	
+//	/* CONFIG DHCP */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_DHCP, uszTemplate, &uszLen);
+//	
+//	/* CONFIG DNSIP */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_DNSIP, uszTemplate, &uszLen);
+//	
+//	/* CONFIG URL*/
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_HOSTURL, uszTemplate, &uszLen);
+//	
+//	/* CONFIG AUTOCON */
+//	memset(uszTemplate, 0x00, sizeof(uszTemplate));
+//	uszLen = sizeof(uszTemplate);
+//	inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_AUTOCON, uszTemplate, &uszLen);
+  
+	return (VS_SUCCESS);
+}
+/*
+Function        :inETHERNET_Connect_Flow
+Date&Time       :2017/7/18 下午 4:53
+Describe        :分流使用CTOS還是使用原生C的Connect
+*/
+int inETHERNET_Connect_Flow(char *szHostIP, char *szPort)
+{
+	int	inRetVal = VS_ERROR;
+	char	szI_FES_Mode[2 + 1] = {0};
+	char	szTRTFileName[12 + 1] = {0};
+	char	szDebugMsg[500 + 1] = {0};
+	char	szCFESMode[2 + 1] = {0};
+
+
+	/* 一律先重置Handle */
+//	ginTrans_ClientFd = -1;
+	
+	/* 用原生C Socket */
+//	memset(szI_FES_Mode, 0x00, sizeof(szI_FES_Mode));
+//	inGetI_FES_Mode(szI_FES_Mode);
+//	memset(szCFESMode, 0x00, sizeof(szCFESMode));
+//	inGetCloud_MFES(szCFESMode);
+//	memset(szTRTFileName, 0x00, sizeof(szTRTFileName));
+//	inGetTRTFileName(szTRTFileName);
+//	
+
+	
+	/* 判斷是IFES及非大來，其他全跑IFES */
+	/* 2018/5/8 下午 2:10 DFS需求不再使用大來主機 */
+	/* CFES也要跑TLS */
+//	if (memcmp(szI_FES_Mode, "Y", strlen("Y")) == 0	||
+//	    memcmp(szCFESMode, "Y", strlen("Y")) == 0)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			memset(szDebugMsg, 0x00, sizeof(szDebugMsg));
+//			sprintf(szDebugMsg, "Connect Flow: TLS");
+//			inLogPrintf(AT, szDebugMsg);
+//		}
+//		
+//		inRetVal = inETHERNET_Connect_TLS_Flow(szHostIP, szPort);
+//		/* 標示現在連線方式，斷線後重新恢復成_ETHERNET_FLOW_CTOS_ */
+//		ginEthernetFlow = _ETHERNET_FLOW_IFES_;
+//	}
+//	/* 用native方式建Socket，之後要優化再考慮使用(優點自己決定Timeout等等細微設定) */
+//	else if (1)
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			memset(szDebugMsg, 0x00, sizeof(szDebugMsg));
+//			sprintf(szDebugMsg, "Connect Flow: Native");
+//			inLogPrintf(AT, szDebugMsg);
+//		}
+		
+		inRetVal = inETHERNET_Connect_By_Native(szHostIP, szPort);
+                if(inRetVal ==VS_SUCCESS )
+                    printf("inETHERNET_Connect_By_Native successed\n");
+                else
+                    printf("inETHERNET_Connect_By_Native failed\n");
+		/* 標示現在連線方式，斷線後重新恢復成_ETHERNET_FLOW_CTOS_ */
+//		ginEthernetFlow = _ETHERNET_FLOW_NATIVE_;
+//
+//	}
+	/* 虹堡API */
+//	else
+//	{
+//		if (ginDebug == VS_TRUE)
+//		{
+//			memset(szDebugMsg, 0x00, sizeof(szDebugMsg));
+//			sprintf(szDebugMsg, "Connect Flow: CTOS");
+//			inLogPrintf(AT, szDebugMsg);
+//		}
+//		
+//		inRetVal = inETHERNET_Connect();
+//		/* 標示現在連線方式，斷線後重新恢復成_ETHERNET_FLOW_CTOS_ */
+//		ginEthernetFlow = _ETHERNET_FLOW_CTOS_;
+//	}
+		
+//	unsigned int	uiStatus = 0;
+//	/* Get the status of the Ethernet */
+//	inETHERNET_Get_Status(&uiStatus);
+//	memset(szDebugMsg, 0x00, sizeof(szDebugMsg));
+//	if (uiStatus & d_STATUS_ETHERNET_CONNECTED)
+//	{
+//		strcat(szDebugMsg, "Connected ");
+//	}
+//	else
+//	{
+//		 strcat(szDebugMsg, "NotConnected ");
+//	}
+//	
+//	if (uiStatus & d_STATUS_ETHERNET_PHYICAL_ONLINE)
+//	{
+//		strcat(szDebugMsg, "Phyical_Online ");
+//	}
+//	else
+//	{
+//		 strcat(szDebugMsg, "NotPhyical_Online ");
+//	}
+//		
+//	if (uiStatus & d_STATUS_ETHERNET_RX_READY)
+//	{
+//		strcat(szDebugMsg, "RxReady ");
+//	}
+//	else
+//	{
+//		 strcat(szDebugMsg, "NotRxReady ");
+//	}
+//	
+//	if (uiStatus & d_STATUS_ETHERNET_TX_BUSY)
+//	{
+//		strcat(szDebugMsg, "TxBusy ");
+//	}
+//	else
+//	{
+//		 strcat(szDebugMsg, "NotTxBusy ");
+//	}
+//        printf("status %s\n",szDebugMsg);
+	return (inRetVal);
+}
+int inETHERNET_SetConfig(void)
+{
+	int		inRetVal = 0;
+	int		inConnectMaxCnt = 1;		/* 連線最大重試次數(含第一次) */
+	int		inConnectNowCnt = 0;		/* 連線目前重試次數 */
+	char		szHostIPPrimary[16 + 1] = {0};
+	char		szHostIPSecond[16 + 1] = {0};
+	char		szHostPortNoPrimary[6 + 1] = {0};
+	char		szHostPortNoSecond[6 + 1] = {0};
+	char		szConfig[16 + 1] = {0};
+	char		szDebugMsg[100 + 1] = {0};
+	char		szDHCPMode[2 + 1] = {0};
+	char		szAutoConnect[10 + 1] = {0};
+	char		szTemplate[50 + 1] = {0};
+	char		szIFESMode[2 + 1] = {0};
+	unsigned char	uszLen = 0;
+
+	/* Set Host IP */
+        memset(szHostIPPrimary,0x00,sizeof(szHostIPPrimary));
+        if (inGetHostIPPrimary(szHostIPPrimary) == VS_ERROR)
+        {
+                /* inGetHostIPPrimary ERROR */
+                printf("inGetHostIPPrimary failed\n");
+                return (VS_ERROR);
+        }
+        
+	inRetVal = inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_HOSTIP, (unsigned char*)szHostIPPrimary, strlen(szHostIPPrimary));
+	if (inRetVal != VS_SUCCESS)
+	{	
+            printf("inETHERNET_Cofig_Set d_ETHERNET_CONFIG_HOSTIP failed\n");
+                return (VS_ERROR);
+	}
+        
+	/* Set Host Port */
+        memset(szHostPortNoPrimary,0x00,sizeof(szHostPortNoPrimary));
+        if (inGetHostPortNoPrimary(szHostPortNoPrimary) == VS_ERROR)
+        {
+                /* Get HostPortNumber Primary ERROR */
+                printf("inGetHostPortNoPrimary failed\n");
+                return (VS_ERROR);
+        }
+        
+	inRetVal = inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_HOSTPORT, (unsigned char*)szHostPortNoPrimary, strlen(szHostPortNoPrimary));
+	if (inRetVal != VS_SUCCESS)
+	{        
+                printf("inETHERNET_Cofig_Set d_ETHERNET_CONFIG_HOSTPORT failed\n");
+                return (VS_ERROR);
+	}
+        
+        /*
+                d_ETHERNET_CONFIG_AUTOCON
+                Set Connection Mode.
+                = 0 : Auto-connect. When Auto-connect is set, the Ethernet module will automatically try to connect to the host every 5 seconds.
+                = 1 : Not support
+                = 2 : Manual. The connection must be established manually by calling CTOS_EthernetConnectxxx() function.
+        */
+        /* 預設成2 */
+	memset(szConfig, 0x00, sizeof(szConfig));
+//	memset(szAutoConnect, 0x00, sizeof(szAutoConnect));
+//	inGetAutoConnect(szAutoConnect);
+//	if (memcmp(&szAutoConnect[0], "1", strlen("1")) == 0)
+//	{
+//		szConfig[0] = '0';
+//	}
+//	else
+//	{
+		szConfig[0] = '2';
+//	}
+	if (inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_AUTOCON, (unsigned char*)szConfig, 1) != VS_SUCCESS)
+	{
+            printf("inETHERNET_Cofig_Set d_ETHERNET_CONFIG_AUTOCON failed\n");
+                return (VS_ERROR);
+	}
+
+        /*
+                d_ETHERNET_CONFIG_DHCP
+                Set IP configuration.
+                = 0 : Static. Use the static IP set in the Ethernet configuration.
+                = 1 : DHCP. Retrieve the dynamic IP from the DHCP server.
+        */
+        /* DHCP預設0 */
+//	memset(szConfig, 0x00, sizeof(szConfig));
+//	memset(szDHCPMode, 0x00, sizeof(szDHCPMode));
+//	inGetDHCP_Mode(szDHCPMode);
+//	if (memcmp(szDHCPMode, "Y", strlen("Y")) == 0)
+//	{
+//		szConfig[0] = 0x31;
+//	}
+//	else
+//	{
+		szConfig[0] = 0x30;
+//	}
+        
+	if (inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_DHCP, (unsigned char*)szConfig, 1) != VS_SUCCESS)
+	{
+            printf("inETHERNET_Cofig_Set d_ETHERNET_CONFIG_DHCP failed\n");
+                return (VS_ERROR);
+	}
+
+        /*
+                d_ETHERNET_CONFIG_UPDATE_EXIT
+                Save the settings to the non-volatile memory in Ethernet module.      
+        */
+	memset(szConfig, 0x00, sizeof(szConfig));
+	if (inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_UPDATE_EXIT, (unsigned char*)szConfig, 0) != VS_SUCCESS)
+	{
+            printf("inETHERNET_Cofig_Set d_ETHERNET_CONFIG_UPDATE_EXIT failed\n");
+                return (VS_ERROR);
+	}
+
+	/* 重置目前重試次數 */
+	inConnectNowCnt = 0;
+	/* 若連線失敗看是否要重試 */
+	do 
+	{
+		inRetVal = inETHERNET_Connect_Flow(szHostIPPrimary, szHostPortNoPrimary);
+		inConnectNowCnt ++;
+		
+	}while (inRetVal != VS_SUCCESS && inConnectNowCnt < inConnectMaxCnt);
+        
+	
+	/* 第一授權主機連線成功 */
+        if (inRetVal == VS_SUCCESS)
+        {
+            printf(" 第一授權主機連線成功\n");
+		/* 如果是DHCP，*/
+//		if (memcmp(szDHCPMode, "Y", strlen("Y")) == 0)
+//		{
+//			memset(szTemplate, 0x00, sizeof(szTemplate));
+//			uszLen = sizeof(szTemplate);
+//			inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_IP, (unsigned char*)szTemplate, &uszLen);
+//			inSetTermIPAddress(szTemplate);
+//			
+//			memset(szTemplate, 0x00, sizeof(szTemplate));
+//			uszLen = sizeof(szTemplate);
+//			inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_MASK, (unsigned char*)szTemplate, &uszLen);
+//			inSetTermMASKAddress(szTemplate);
+//			
+//			memset(szTemplate, 0x00, sizeof(szTemplate));
+//			uszLen = sizeof(szTemplate);
+//			inETHERNET_Cofig_Get(d_ETHERNET_CONFIG_GATEWAY, (unsigned char*)szTemplate, &uszLen);
+//			inSetTermGetewayAddress(szTemplate);
+//			
+//			inSaveEDCRec(0);
+//		}
+                /* 看狀態 */
+                inETHERNET_Watch_Status();
+                return (VS_SUCCESS);
+        }
+        else
+	{
+		inETHERNET_END();
+	}
+
+/*目前只有一個host ip and port 以下不實作*/        
+        /* 看狀態 */
+	//inETHERNET_Watch_Status();
+////	inDISP_Clear_Line(_LINE_8_6_, _LINE_8_6_);
+////	inDISP_ChineseFont("第二組IP", _FONTSIZE_8X16_, _LINE_8_6_, _DISP_LEFT_);
+//	/* 嘗試連線第二授權主機 */
+//	/* 更改HostIP */
+//	/* Set Host IP */
+//        memset(szHostIPSecond,0x00,sizeof(szHostIPSecond));
+//        if (inGetHostIPSecond(szHostIPSecond) == VS_ERROR)
+//        {
+//                /* inGetHostIPSecond ERROR */
+//                /* debug */
+//                if (ginDebug == VS_TRUE)
+//                        inLogPrintf(AT, "inGetHostIPSecond() ERROR!!");
+//
+//                return (VS_ERROR);
+//        }
+//        
+//	inRetVal = inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_HOSTIP, (unsigned char*)szHostIPSecond, strlen(szHostIPSecond));
+//	if (inRetVal != VS_SUCCESS)
+//	{
+//		if (ginDebug == VS_TRUE)
+//                {
+//			memset(szDebugMsg, 0x00, sizeof(szDebugMsg));
+//                        sprintf(szDebugMsg, "d_ETHERNET_CONFIG_HOSTIP Error : 0x%04x", inRetVal);
+//                        inLogPrintf(AT, szDebugMsg);
+//                }
+//	
+//                return (VS_ERROR);
+//	}
+//	
+//	/* Set Host Port */
+//        memset(szHostPortNoSecond, 0x00, sizeof(szHostPortNoSecond));
+//        if (inGetHostPortNoSecond(szHostPortNoSecond) == VS_ERROR)
+//        {
+//                /* Get HostPortNumber Primary ERROR */
+//                /* debug */
+//                if (ginDebug == VS_TRUE)
+//                        inLogPrintf(AT, "inGetHostPortNoSecond() ERROR!!");
+//                
+//                return (VS_ERROR);
+//        }
+//        
+//	if (inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_HOSTPORT, (unsigned char*)szHostPortNoSecond, strlen(szHostPortNoSecond)) != VS_SUCCESS)
+//	{
+//                if (ginDebug == VS_TRUE)
+//                        inLogPrintf(AT, "d_ETHERNET_CONFIG_HOSTPORT Error");
+//	
+//                return (VS_ERROR);
+//	}
+//	
+//	/* 紀錄在記憶體內 */
+//	memset(szConfig, 0x00, sizeof(szConfig));
+//	if (inETHERNET_Cofig_Set(d_ETHERNET_CONFIG_UPDATE_EXIT, (unsigned char*)szConfig, 0) != VS_SUCCESS)
+//	{
+//                if (ginDebug == VS_TRUE)
+//                        inLogPrintf(AT, "d_ETHERNET_CONFIG_UPDATE_EXIT Error");
+//	
+//                return (VS_ERROR);
+//	}
+//	
+//	/* 重置目前重試次數 */
+//	inConnectNowCnt = 0;
+//	/* 若連線失敗看是否要重試 */
+//	do 
+//	{
+//		inRetVal = inETHERNET_Connect_Flow(szHostIPSecond, szHostPortNoSecond);
+//		inConnectNowCnt ++;
+//	}while (inRetVal != VS_SUCCESS && inConnectNowCnt < inConnectMaxCnt);
+//
+//	/* 第二授權主機連線成功 */
+//        if (inRetVal == VS_SUCCESS)
+//        {
+//                return (VS_SUCCESS);
+//        }
+//        else
+//	{
+//               /* 若第二授權主機連線不成功，直接斷線 */ 
+//	}
+//	
+//	/* 第二授權IP失敗 */
+//	if (ginDebug == VS_TRUE)
+//	{
+//		memset(szDebugMsg, 0x00, sizeof(szDebugMsg));
+//		sprintf(szDebugMsg, "Second IP Conenct Fail");
+//		inLogPrintf(AT, szDebugMsg);
+//	}
+//	
+//	/* 到最後還失敗，斷線 */
+//	inETHERNET_END();
+//	
+//        if (ginDebug == VS_TRUE)
+//                inLogPrintf(AT, "inETHERNET_SetConfig() END!");
+//        
+//	/* 若連線成功，中間就會Return出去，若一直失敗，則最後一定回傳失敗 */
+//        return (VS_ERROR);
+}
+
+/*
+Function        :inETHERNET_Send_Data
+Date&Time       :2017/7/18 下午 5:28
+Describe        :傳送資料
+ */
+int inETHERNET_Send_Data(unsigned char* uszData, unsigned short usLen) {
+    DWORD dwStatus;
+     int i,iLength = 0; 
+    char szDebugMsg[100 + 1];
+    char babuff[128];
+    unsigned short usRetVal;
+    //Get the status of Ethernet // 
+    usRetVal = CTOS_EthernetStatus(&dwStatus);
+    if (usRetVal != d_OK) {
+        printf("status failed\n");
+    } else {
+        sprintf(szDebugMsg, "0x%08X", dwStatus);
+        printf("babuff is %s\n", szDebugMsg);
+    }
+    if (dwStatus & d_STATUS_ETHERNET_CONNECTED) {
+        printf("d_STATUS_ETHERNET_CONNECTED\n");
+        sprintf(szDebugMsg, "0123456789ABCDEF");
+        for (i = 0; i <= 10; i++) {
+            //Check Ethernet hether ready to transmit data. 
+            if (CTOS_EthernetTxReady() == d_OK) {
+                //Transmit data via Ethernet channel // 
+                CTOS_EthernetTxData(babuff, strlen(babuff));
+                iLength += strlen(babuff);
+                sprintf(&babuff[100], "%dbyte", iLength);
+//                CTOS_LCDTPrintXY(8, 3, &babuff[100]);
+                CTOS_Delay(1000);
+            }
+        }
+    }
+//    usRetVal = CTOS_EthernetTxData(uszData, usLen);
+//    if (usRetVal == d_OK) {
+//        printf("inETHERNET_Send_Data successed\n");
+//    } else {
+//        printf("inETHERNET_Send_Data failed,ret is %X\n", usRetVal);
+//        return (VS_ERROR);
+//    }
+
+    return (VS_SUCCESS);
+}
 int main(int argc, char *argv[]) {
     int i = 0;
     int inPrintIndex = 0, inRetVal;
@@ -1083,7 +1939,10 @@ int main(int argc, char *argv[]) {
     TRANSACTION_OBJECT pobTran;
     //inFunc_ls("-R -l", _AP_ROOT_PATH_);
     inETHERNET_Initial();
-    EthernetPing(hostIp);
+    inETHERNET_SetConfig();
+    char msg[] ="hello test 20260102";
+    inETHERNET_Send_Data(msg,strlen(msg));
+//    EthernetPing(hostIp);
     pobTran.srBRec.inPrintOption = _PRT_CUST_;
     strcpy(pobTran.srBRec.szCardLabel, "9中9文9字9"); //卡別
     strcpy(pobTran.srBRec.szPAN, "252500001616"); //卡號
